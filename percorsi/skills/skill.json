@@ -1,0 +1,22 @@
+[
+    {
+        "nome": "Fulmine",
+        "tipo": "TEMPO",
+        "descrizione": "Terminata la partita con un tempo minore di 1 minuto"
+    },
+    {
+        "nome": "Puoi far di meglio",
+        "tipo": "TEMPO",
+        "descrizione": "Terminata la partita con un tempo  minore di 5 minuti"
+    },
+    {
+        "nome": "Lumaca",
+        "tipo": "TEMPO",
+        "descrizione": "Terminata la partita con un tempo minore a 10 minuti"
+    },
+    {
+        "nome": "Conoscenza quiz informatico",
+        "tipo": "CONOSCENZA",
+        "descrizione": "Aver risposto a tutte le domande del quiz"
+    }
+]

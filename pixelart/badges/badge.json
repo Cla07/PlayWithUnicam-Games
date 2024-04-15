@@ -1,0 +1,40 @@
+[
+    {
+        "nome": "2 domande corrette" ,
+        "tipo": "DOMANDE",
+        "descrizione": "Rispondere correttamente a 2 domande"
+    },
+    {
+        "nome": "5 domande corrette" ,
+        "tipo": "DOMANDE",
+        "descrizione": "Rispondere correttamente a 5 domande"
+    },
+
+    {
+        "nome": "10 domande corrette" ,
+        "tipo": "DOMANDE",
+        "descrizione": "Rispondere correttamente a 10 domande"
+    },
+    {
+        "nome": "2 partite effettuate" ,
+        "tipo": "PARTITE",
+        "descrizione": "Effettuare almeno 2 partite di un gioco quiz"
+    },
+    {
+        "nome": "5 partite effettuate" ,
+        "tipo": "PARTITE",
+        "descrizione": "Effettuare almeno 5 partite di un gioco quiz"
+    },
+    {
+        "nome": "10 partite effettuate" ,
+        "tipo": "PARTITE",
+        "descrizione": "Effettuare almeno 10 partite di un gioco quiz"
+    },
+    {
+        "nome": "100 partite effettuate" ,
+        "tipo": "PARTITE",
+        "descrizione": "Effettuare almeno 100 partite di un gioco quiz"
+    }
+
+]
+

@@ -15,6 +15,15 @@ import { QuizQuestion } from './quiz-question';
 import { ClassificaPage } from 'src/app/modal-pages/classifica/classifica.page';
 import jwt_decode from 'jwt-decode';
 import { DomSanitizer } from '@angular/platform-browser';
+import skillsJson from 'src/app/PlayWithUnicam-Games/quiz/skills/skill.json';
+import badgesJson from 'src/app/PlayWithUnicam-Games/quiz/badges/badge.json';
+import { Badge } from 'src/app/components/badge';
+import { ReportisticaService } from 'src/app/services/reportistica-service/reportistica.service';
+import { BadgeService } from 'src/app/users/admin/services/badge-service/badge.service';
+import { forkJoin, from } from 'rxjs';
+import { concatMap } from 'rxjs/operators';
+import { SkillService } from 'src/app/users/admin/services/skill-service/skill.service';
+import { Skill } from 'src/app/components/skill';
 
 @Pipe({ name: 'safe' })
 export class SafePipe implements PipeTransform {
@@ -45,6 +54,11 @@ export class QuizPage implements OnInit, OnDestroy {
   toolbarColor: string = 'primary';
   amIDone: boolean = false;
 
+  badgesJson: Badge[] = badgesJson; //assegno i badge del json di questo gioco 
+
+  skillsJson: Skill[] = skillsJson; //assegno le skill del json di questo gioco
+
+
   /**
    * stringa per mostare il tempo (formato 'min:sec')
    */
@@ -55,6 +69,7 @@ export class QuizPage implements OnInit, OnDestroy {
   private someoneHasWon = false;
   info_partita = { codice: null, codice_lobby: null, giocatore_corrente: null, id_gioco: null, info: null, vincitore: null };
   lobby = { codice: null, admin_lobby: null, pubblica: false, min_giocatori: 0, max_giocatori: 0, nome: null, link: null, regolamento: null };
+  reportistica = { cod_partita: null, username: null, score: 0, correctAnswers: null, answers: 0, time: 0, badges: null, skills: null, info: null }
 
   private timerInfoPartita;
   private timerPing;
@@ -102,6 +117,36 @@ export class QuizPage implements OnInit, OnDestroy {
   */
   localPlayer: string;
 
+
+
+  /**
+   * lista dei bagde in base all'id del gioco 
+   */
+  badgesFromIdGame: Badge[] = [];
+
+
+  /**
+ * lista delle skill in base all'id del gioco 
+ */
+  skillsFromIdGame: Skill[] = [];
+
+  /**
+   * Id gioco 
+   */
+  id_gioco: any;
+
+  //reportitica dello stesso giocatore e stesso id 
+  reportUserIdGame: any;
+
+
+  tipologiaUtente: any;
+
+  private numPartiteEffett: any
+  subscriptionNumeroPartite: any;
+  numeroPartiteGioc: number;
+  listaNumPartiteGiocatori: number;
+  tipoUtente: any;
+
   constructor(
     private domCtrl: DomController,
     private renderer: Renderer2,
@@ -113,13 +158,33 @@ export class QuizPage implements OnInit, OnDestroy {
     private errorManager: ErrorManagerService,
     private router: Router,
     private modalController: ModalController,
-    private quizLogic: QuizLogicService) { }
+    private quizLogic: QuizLogicService,
+    private reportisticaService: ReportisticaService,
+    private badgeService: BadgeService,
+    private skillService: SkillService
+  ) {
+
+    this.loginService.getUserType().then(
+      tipoUtente => {
+        this.tipologiaUtente = tipoUtente;
+        if (tipoUtente)
+          if (tipoUtente == "ADMIN") this.tipoUtente = tipoUtente;
+      })
+  }
 
   ngOnInit() {
     this.isLeavingPage = false;
     this.ping();
     this.loadInfoLobby();
     this.initializeTimers();
+
+    //NB  In intro-lobby-popover.component carico badge/skill del gioco selezionato da giochi_badge/giochi_skill
+    // e li salvo in badgeService e skillService
+
+    ////prendo lista badge e skill in base all'id, precedentemente presi nella classe intro-lobby.components
+    this.badgesFromIdGame = this.badgeService.getlistaBadgeFromIdGame();  //prendo lista badge salvato nel metodo prima per averli nel gioco quiz  
+
+    this.skillsFromIdGame = this.skillService.getlistaSkillFromIdGame();
 
     this.getGameConfig()
       .then(_ => { return this.loadPlayers() })
@@ -229,7 +294,6 @@ export class QuizPage implements OnInit, OnDestroy {
         "time": this.seconds
       }
     }
-
     this.http.put('/game/save', toSend).subscribe(
       async (res) => { },
       async (res) => { this.handleError(res, 'Invio dati partita fallito'); }
@@ -265,8 +329,8 @@ export class QuizPage implements OnInit, OnDestroy {
       this.http.get('/game/status', { headers }).subscribe(
         async (res) => {
           this.info_partita = res['results'];
-          // console.log('info_partita', this.info_partita);
-
+          //  console.log('info_partita', this.info_partita);
+          this.id_gioco = this.info_partita.id_gioco
           this.info_partita.info.giocatori.forEach(p => {
             if (p.info_giocatore.answered == this.questionsTotalNumber) {
               if (p.username != this.localPlayer) {
@@ -369,6 +433,20 @@ export class QuizPage implements OnInit, OnDestroy {
     // var button = [{ text: 'Esci', handler: () => { this.leaveMatch() } }];
     if (this.answeredQuestions.length == this.questionsTotalNumber) {
       this.sendMatchData();
+
+      //se non è un utente ospite 
+      if (this.tipologiaUtente != "OSPITE") {
+
+        //aggiunta dati a reportistica (prima di calcolare i badge e le skill)
+        this.aggiuntaDatiReportistica();
+
+        //calcolo assegnazione badge  
+        this.calcolaAssegnazioneBadge()
+
+        this.calcolaAssegnazioneSkill()
+
+      }
+
       this.terminaPartita();
 
       this.alertCreator.createAlert("Complimenti!", "Hai completato il quiz in " + this.display, button, false);
@@ -457,6 +535,354 @@ export class QuizPage implements OnInit, OnDestroy {
     this.sortRanking();
     this.updateScore();
   }
+
+
+  async aggiuntaDatiReportistica() {
+
+
+
+    //per ogni giocatore in classifica 
+    this.classifica.forEach(async (giocatore) => {
+
+      /*
+      //Al momento sono stati messi i campi a NULL in: 
+       -correctAnswered = domande corrette 
+       -skills 
+       -info 
+       */
+
+      //NB: messo 2 volte giocatore.score perchè punteggio e domande_corrette in questo caso corrispondono
+      //aggiunta dati in reportistica  
+      this.reportisticaService.creaReportistica(giocatore.username, this.info_partita.codice, this.info_partita.id_gioco, giocatore.score,
+        giocatore.answered, giocatore.time, '', '');
+
+    })
+
+  }
+
+
+  /**
+   * Calcola assegnazione badge 
+   */
+  async calcolaAssegnazioneBadge() {
+
+    if (this.tipologiaUtente != "OSPITE") {
+      // BAGDE DOMANDE 
+
+      this.calcolaAssegnaBadgeDomandeCorrette();
+
+      // BAGDE PARTITE 
+
+      this.contaPartiteEffettuate()
+
+    }
+  }
+
+  /**
+   * Prendo tutte le partite di tipo quiz che ha fatto un giocatore
+   * 
+   * controllo se posso assegnare il badge per il numero partite 
+   */
+
+  contaPartiteEffettuate() {
+
+    console.log("Conto le partite effettuate");
+    const categoria = 'quiz';
+
+    //per ogni giocatore prendo tutte le partite che ha fatto dove la categoria è un quiz 
+    const observablesListaNumPartite = this.classifica.map((giocatore) => {
+      return this.reportisticaService.getReportUserCategoria(giocatore.username, categoria);
+    });
+
+    forkJoin(observablesListaNumPartite).subscribe(
+      (listaNumPartiteGioc) => {
+
+        // Lista per salvare i valori delle partite
+        //const listaNumeroPartite: number[] = [];
+
+        listaNumPartiteGioc.forEach((numPartite, index) => {
+
+
+          console.log("Numero partite per giocatore " + this.classifica[index].username + ": " + numPartite);
+
+          //controllo se il numero di partite che ha fatto il giocatore sono maggiori rispetto al numero nel badge 
+          //e le assegno al giocatore  
+
+          //forse l'indice non va bene, perchè non so la posizione delo giocatore.... 
+          this.controlloBadgeNumPartite(numPartite, this.classifica[index].username)  //vedere se prende correttamente l'username 
+
+
+        });
+
+
+
+        //Faccio tutte le unsubsribe
+        if (this.subscriptionNumeroPartite) {
+          this.subscriptionNumeroPartite.unsubscribe();
+        }
+      },
+      (error) => {
+        console.error("Errore durante il conteggio delle partite:", error);
+      }
+    );
+  }
+
+  /**
+   * Controllo se al giocatore posso assegnare il badge per le n partite raggiunte 
+   * @param numPartQuizPlayer numero delle partite che fa il giocatore (gioco di categoria quiz) 
+   * @param username username del giocaore
+   */
+  //Funzionante perfettamente 
+  controlloBadgeNumPartite(numPartQuizPlayer, username) {
+
+    console.log("Controllo badge numero partite")
+    const badgePartite = this.badgesFromIdGame.filter(badge => badge.tipo == "PARTITE")
+
+    console.log("BADGE PARTITE" + badgePartite);
+
+    const numeroPartiteEffettuate = numPartQuizPlayer;
+
+    const badgeDaAssegnare = badgePartite.filter(badge => {
+      const matchResult = badge.nome.match(/\d+/);
+      const numeroOnBadge = parseInt(matchResult[0]);
+
+      if (numeroPartiteEffettuate === 2) {
+
+        return numeroOnBadge === 2;
+
+      } else if (numeroPartiteEffettuate > 2 && numeroPartiteEffettuate <= 5) {
+        return numeroOnBadge === 5;
+      }
+      else if (numeroPartiteEffettuate >= 10 && numeroPartiteEffettuate <= 99) {
+
+        return numeroOnBadge === 10;
+      }
+      else if (numeroPartiteEffettuate >= 100 && numeroPartiteEffettuate <= 999) {
+
+        return numeroOnBadge === 100;
+      }
+      else if (numeroPartiteEffettuate >= 1000) {
+
+        return numeroOnBadge === 1000;
+      }
+
+      // Se nessuna condizione è soddisfatta, restituisci false
+      return false;
+    });
+
+
+    //aggiunto controllo 
+    if (badgeDaAssegnare.length > 0 && badgeDaAssegnare[0].hasOwnProperty('nome')) {
+
+      let idBadge;
+
+      //prendo l'id del badge 
+      const observablesIdBadge = from(this.badgeService.searchIdBadgeFromName(badgeDaAssegnare[0].nome));
+
+      forkJoin(observablesIdBadge).subscribe(
+        (idBadgeArray) => {
+          idBadge = idBadgeArray[0]; // risultato dalla chiamata
+
+          this.badgeService.insertUserBadgeUpdateReport(username, idBadge, this.info_partita.codice);
+        },
+        (error) => {
+          console.error("Errore durante il forkJoin:", error);
+        }
+      );
+
+    }
+    else {
+      console.error("Nessun badge da assegnare trovato o nome del badge non definito.");
+    }
+
+  }
+
+  /**
+   * Assegna badge domande corrette
+   */
+  calcolaAssegnaBadgeDomandeCorrette() {
+
+    this.classifica.forEach(giocatore => {
+
+      let domandeCorrette = giocatore.score;
+
+      this.assegnaBadgeDomandeCorrette(giocatore.username, domandeCorrette);
+    });
+
+  }
+
+  //Calcola e assegna il badge di domande corrette 
+
+  assegnaBadgeDomandeCorrette(username, domandeCorrette) {
+
+    let domandeCorretteGiocatore = domandeCorrette;
+
+    const badgeDomande = this.badgesFromIdGame.filter(badge => badge.tipo == "DOMANDE")  //badge di tipo domande 
+
+
+    console.log("Badge domande " + badgeDomande);
+
+
+    //array di badge da assegnare 
+    const badgeDaAssegnare = badgeDomande.filter(badge => {
+
+      //prendo il numero scritto nel badge (dal nome)
+      const matchResult = badge.nome.match(/\d+/);
+
+      const numeroOnBadge = parseInt(matchResult[0]);
+
+      if (numeroOnBadge && domandeCorretteGiocatore >= numeroOnBadge) {
+
+        //2 Domande Corrette 
+        if (domandeCorretteGiocatore < 5) {
+
+          return numeroOnBadge === 2;
+          //5 Domande Corrette 
+        } else if (domandeCorretteGiocatore >= 5 && domandeCorretteGiocatore < 10) {
+          return numeroOnBadge === 5;
+        }
+        //10 domande corrette 
+        else if (domandeCorretteGiocatore >= 10) {
+
+          return numeroOnBadge === 10;
+        }
+      }
+      // altrimenti false
+      return false;
+    });
+
+    console.log("badgeDaAssegnare " + badgeDaAssegnare);
+    console.log("badgeDaAssegnare[] " + badgeDaAssegnare[0]);
+
+    let idBadge;
+
+
+    if (badgeDaAssegnare.length > 0 && badgeDaAssegnare[0].hasOwnProperty('nome')) {
+
+      //prendo l'id della skill 
+      const observablesIdBadge = from(this.badgeService.searchIdBadgeFromName(badgeDaAssegnare[0].nome));
+      if (observablesIdBadge) {
+        forkJoin(observablesIdBadge).subscribe(
+          (idBadgeArray) => {
+            idBadge = idBadgeArray[0]; // risultato dalla chiamata
+
+            this.badgeService.insertUserBadgeUpdateReport(username, idBadge, this.info_partita.codice);
+
+          },
+          (error) => {
+            console.error("Errore durante il forkJoin:", error);
+          }
+        );
+
+      } else {
+        console.error("Observable degli ID dei badge non definito.");
+      }
+
+    } else {
+      console.error("Nessun badge da assegnare trovato o nome del badge non definito.");
+    }
+
+  }
+
+
+  /////INZIO SKILL 
+
+  /**
+   * Calcola assegnazione Skill 
+   */
+
+  calcolaAssegnazioneSkill() {
+    let timePlayer: any = 0;
+    let numberCorrectAnswersPlayer = 0;
+
+    this.classifica.forEach(giocatore => {
+      timePlayer = giocatore.time;
+
+      this.assegnaSkilTempo(giocatore.username, timePlayer);
+      //qui posso calcolare altre skill....
+      numberCorrectAnswersPlayer = giocatore.answered  //salvo le risposte che ha fatto il giocatore 
+      this.calcolaSkillConoscenza(giocatore.username, numberCorrectAnswersPlayer);
+    });
+
+  }
+
+  /**
+   * Controllo se al giocatore posso assegnare il badge per le n partite raggiunte 
+   * 
+   * @param username username del giocatore
+   * @param time_player tempo svolgimento partita 
+   */
+  assegnaSkilTempo(username, time_player) {
+
+    console.log("Calcola e assegna skill tempo")
+
+    const skillTempo = this.skillsFromIdGame.filter(skill => skill.tipo == "TEMPO")
+
+
+    const timePlayer = time_player / 60; //divisione 60 per trasformare da secondi a minuti 
+
+    //array di skill da assegnare 
+    const skillDaAssegnare = skillTempo.filter(skill => {
+      const matchResult = skill.descrizione.match(/\d+/);
+
+      console.log("Match result: " + matchResult);
+
+      const numeroOnSkill = parseInt(matchResult[0]);
+
+      if (timePlayer <= numeroOnSkill) {
+
+        //tempo < 2 
+        if (timePlayer < 1) {
+
+          return numeroOnSkill === 1;
+
+        } else if (timePlayer > 1 && timePlayer <= 5) {
+          return numeroOnSkill === 5;
+        }
+        else if (timePlayer >= 5 && timePlayer < 10) {
+
+          return numeroOnSkill === 10;
+        }
+
+      }
+      // Se nessuna condizione è soddisfatta, restituisco false
+      return false;
+    });
+
+    let idSkill;
+
+    //prendo l'id della skill 
+    const observablesIdBadge = from(this.skillService.searchIdSkillFromName(skillDaAssegnare[0].nome));
+
+    forkJoin(observablesIdBadge).subscribe(
+      (idSkillArray) => {
+        idSkill = idSkillArray[0]; // risultato dalla chiamata
+
+        this.skillService.insertUserSkillUpdateReport(username, idSkill, this.info_partita.codice);
+      },
+      (error) => {
+        console.error("Errore durante il forkJoin:", error);
+      }
+    );
+
+  }
+
+  /*
+  Calcola skill della conoscenza
+  */
+  calcolaSkillConoscenza(username, numeroRisposteGiocatore) {
+
+    const skillConoscenza = this.skillsFromIdGame.filter(skill => skill.tipo == "CONOSCENZA")  //skill di tipo conoscenza 
+
+    skillConoscenza.forEach(async skill => {
+      if (numeroRisposteGiocatore == this.questionsTotalNumber) {
+        console.log("Inserimento in utente skill e aggiorno reportistica")
+        this.skillService.insertUserSkillUpdateReport2(username, skill.nome, this.info_partita.codice);
+      }
+    })
+
+  }
+  //////FINE SKILL
 
   /**
    * Ordina la classifica.
